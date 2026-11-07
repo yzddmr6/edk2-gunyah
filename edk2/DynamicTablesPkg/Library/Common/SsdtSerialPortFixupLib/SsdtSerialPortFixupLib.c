@@ -296,7 +296,8 @@ FixupCrs (
 {
   EFI_STATUS              Status;
   AML_OBJECT_NODE_HANDLE  NameOpCrsNode;
-  AML_DATA_NODE_HANDLE    QWordRdNode;
+  AML_DATA_NODE_HANDLE    PlaceholderRdNode;
+  UINT32                  MemLength;
 
   // Get the "_CRS" object defined by the "Name ()" statement.
   Status = AmlFindNode (
@@ -308,22 +309,36 @@ FixupCrs (
     return Status;
   }
 
-  // Get the first Rd node in the "_CRS" object.
-  Status = AmlNameOpGetFirstRdNode (NameOpCrsNode, &QWordRdNode);
+  // Delete the QWordMemory placeholder from the template (leaving the EndTag),
+  // then re-emit the register block as a 32-bit fixed memory descriptor. Windows'
+  // SerCx2/SerPL011 refuses the QWordMemory form (STATUS_ACPI_INVALID_DATA at
+  // start); real PL011 ACPI uses Memory32Fixed. The UART lives in the low MMIO
+  // window so 32 bits is always sufficient here.
+  Status = AmlNameOpGetFirstRdNode (NameOpCrsNode, &PlaceholderRdNode);
   if (EFI_ERROR (Status)) {
     return Status;
   }
 
-  if (QWordRdNode == NULL) {
-    return EFI_INVALID_PARAMETER;
+  if (PlaceholderRdNode != NULL) {
+    Status = AmlDetachNode ((AML_NODE_HANDLE)PlaceholderRdNode);
+    if (EFI_ERROR (Status)) {
+      return Status;
+    }
+
+    Status = AmlDeleteTree ((AML_NODE_HANDLE)PlaceholderRdNode);
+    if (EFI_ERROR (Status)) {
+      return Status;
+    }
   }
 
-  // Update the Serial Port base address and length.
-  Status = AmlUpdateRdQWord (
-             QWordRdNode,
-             SerialPortInfo->BaseAddress,
-             ((SerialPortInfo->BaseAddressLength < MIN_UART_ADDRESS_LENGTH) ?
-              MIN_UART_ADDRESS_LENGTH : SerialPortInfo->BaseAddressLength)
+  MemLength = (UINT32)((SerialPortInfo->BaseAddressLength < MIN_UART_ADDRESS_LENGTH) ?
+                       MIN_UART_ADDRESS_LENGTH : SerialPortInfo->BaseAddressLength);
+  Status = AmlCodeGenRdMemory32Fixed (
+             TRUE,                                   // ReadWrite
+             (UINT32)SerialPortInfo->BaseAddress,
+             MemLength,
+             NameOpCrsNode,
+             NULL
              );
   if (EFI_ERROR (Status)) {
     return Status;
@@ -547,6 +562,24 @@ BuildSsdtSerialPortTable (
       " Status = %r\n",
       Status
       ));
+  } else {
+    // Diagnostic hexdump of the generated AML so it can be captured off the
+    // serial console and disassembled (iasl -d) on the host.
+    UINT8   *TblBytes;
+    UINT32  TblLen;
+    UINT32  HexIdx;
+
+    TblBytes = (UINT8 *)*Table;
+    TblLen   = ((EFI_ACPI_DESCRIPTION_HEADER *)*Table)->Length;
+    DEBUG ((DEBUG_ERROR, "SSDT-AML-DUMP name=%a uid=%lu len=%u\n",
+            Name, Uid, TblLen));
+    for (HexIdx = 0; HexIdx < TblLen; HexIdx++) {
+      if ((HexIdx & 15) == 0) {
+        DEBUG ((DEBUG_ERROR, "\nSSDT-AML:"));
+      }
+      DEBUG ((DEBUG_ERROR, " %02x", TblBytes[HexIdx]));
+    }
+    DEBUG ((DEBUG_ERROR, "\nSSDT-AML-END\n"));
   }
 
 exit_handler:

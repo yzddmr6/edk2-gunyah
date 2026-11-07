@@ -52,15 +52,32 @@ CONST COMPATIBILITY_INFO  Serial16550CompatibleInfo = {
   Serial16550CompatibleStr
 };
 
-/** SBSA UART compatible strings.
+/** PL011 UART compatible strings.
 
-  Include PL011 as SBSA uart is a subset of PL011.
+  Kept separate from the SBSA list (upstream folds PL011 into SBSA): a full PL011
+  must be advertised with the PL011 DBG2 subtype so the SSDT serial device gets
+  _HID ARMH0011 -- the only ID Windows' inbox serpl011.inf matches. The SBSA
+  subtype yields _HID ARMHB000, which no inbox Windows driver binds.
+
+  Any string of this list must be part of SerialCompatible.
+*/
+STATIC CONST COMPATIBILITY_STR  SerialPl011CompatibleStr[] = {
+  { "arm,pl011" }
+};
+
+/** COMPATIBILITY_INFO structure for the SerialPl011Compatible.
+*/
+CONST COMPATIBILITY_INFO  SerialPl011CompatibleInfo = {
+  ARRAY_SIZE (SerialPl011CompatibleStr),
+  SerialPl011CompatibleStr
+};
+
+/** SBSA UART compatible strings.
 
   Any string of this list must be part of SerialCompatible.
 */
 STATIC CONST COMPATIBILITY_STR  SerialSbsaCompatibleStr[] = {
-  { "arm,sbsa-uart" },
-  { "arm,pl011"     }
+  { "arm,sbsa-uart" }
 };
 
 /** COMPATIBILITY_INFO structure for the SerialSbsaCompatible.
@@ -237,6 +254,16 @@ SerialPortNodeParser (
       // 8250/16550 defaults to byte access.
       SerialPortInfo->AccessSize = EFI_ACPI_6_3_BYTE;
     }
+  } else if (FdtNodeIsCompatible (
+               Fdt,
+               SerialPortNode,
+               &SerialPl011CompatibleInfo
+               ))
+  {
+    // Checked before SBSA: a node carrying both "arm,pl011" and "arm,sbsa-uart"
+    // is a full PL011 and must get the PL011 subtype (see SerialPl011CompatibleStr).
+    SerialPortInfo->PortSubtype =
+      EFI_ACPI_DBG2_PORT_SUBTYPE_SERIAL_ARM_PL011_UART;
   } else if (FdtNodeIsCompatible (
                Fdt,
                SerialPortNode,
